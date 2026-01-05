@@ -1,111 +1,85 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Hand Tracking 3D Christmas Tree</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<title>3D Hand Controlled Tree</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <!-- Three.js -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<!-- Three.js -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 
-  <!-- MediaPipe Hands -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<!-- MediaPipe -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
-  <style>
-    body {
-      margin: 0;
-      overflow: hidden;
-      background: #000;
-    }
-    #video {
-      display: none;
-    }
-    #hint {
-      position: fixed;
-      bottom: 20px;
-      width: 100%;
-      text-align: center;
-      color: white;
-      font-family: Arial, sans-serif;
-      opacity: 0.8;
-    }
-  </style>
+<style>
+  body { margin:0; overflow:hidden; background:black; }
+  #video { display:none; }
+  #hint {
+    position:fixed; bottom:15px; width:100%;
+    text-align:center; color:white;
+    font-family:Arial; opacity:.7;
+  }
+</style>
 </head>
 <body>
 
 <video id="video" autoplay playsinline></video>
-<div id="hint">Raise and rotate your hand to spin the tree</div>
+<div id="hint">Move hand to rotate — Open / close palm to zoom</div>
 
 <script>
-/* =======================
-   THREE.JS SETUP
-======================= */
+/* ======================
+   THREE.JS SCENE
+====================== */
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
 
 const camera = new THREE.PerspectiveCamera(
-  60,
-  window.innerWidth / window.innerHeight,
-  0.1,
-  100
+  60, window.innerWidth / window.innerHeight, 0.1, 100
 );
-camera.position.z = 4;
+camera.position.z = 5;
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-/* Light */
 scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-dirLight.position.set(3, 5, 2);
-scene.add(dirLight);
+const light = new THREE.DirectionalLight(0xffffff, 0.8);
+light.position.set(3,5,3);
+scene.add(light);
 
-/* =======================
-   CHRISTMAS TREE
-======================= */
-const treeGroup = new THREE.Group();
+/* ======================
+   TREE MODEL (GROUP)
+====================== */
+const tree = new THREE.Group();
 
-/* Tree layers */
-function createCone(radius, height, y) {
-  const geo = new THREE.ConeGeometry(radius, height, 32);
-  const mat = new THREE.MeshStandardMaterial({ color: 0x0a8f3c });
-  const mesh = new THREE.Mesh(geo, mat);
+function cone(r,h,y){
+  const g = new THREE.ConeGeometry(r,h,32);
+  const m = new THREE.MeshStandardMaterial({color:0x0a8f3c});
+  const mesh = new THREE.Mesh(g,m);
   mesh.position.y = y;
   return mesh;
 }
+tree.add(cone(1.2,1.6,0));
+tree.add(cone(1.0,1.4,0.7));
+tree.add(cone(0.8,1.2,1.3));
 
-treeGroup.add(createCone(1.2, 1.6, 0));
-treeGroup.add(createCone(1.0, 1.4, 0.6));
-treeGroup.add(createCone(0.8, 1.2, 1.1));
-
-/* Trunk */
 const trunk = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.15, 0.15, 0.5),
-  new THREE.MeshStandardMaterial({ color: 0x8b5a2b })
+  new THREE.CylinderGeometry(0.15,0.15,0.5),
+  new THREE.MeshStandardMaterial({color:0x8b5a2b})
 );
 trunk.position.y = -1;
-treeGroup.add(trunk);
+tree.add(trunk);
 
-/* Star */
-const star = new THREE.Mesh(
-  new THREE.OctahedronGeometry(0.2),
-  new THREE.MeshStandardMaterial({ color: 0xffd700, emissive: 0xffaa00 })
-);
-star.position.y = 2;
-treeGroup.add(star);
+scene.add(tree);
 
-scene.add(treeGroup);
-
-/* =======================
-   MEDIAPIPE HANDS
-======================= */
-const videoElement = document.getElementById("video");
+/* ======================
+   HAND TRACKING
+====================== */
+const video = document.getElementById("video");
 
 const hands = new Hands({
-  locateFile: (file) =>
-    `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
 });
 
 hands.setOptions({
@@ -115,49 +89,75 @@ hands.setOptions({
   minTrackingConfidence: 0.7
 });
 
-let targetRotationY = 0;
+/* Target values (like Blender transforms) */
+let targetRotX = 0;
+let targetRotY = 0;
+let targetScale = 1;
 
-hands.onResults((results) => {
-  if (results.multiHandLandmarks) {
-    const landmarks = results.multiHandLandmarks[0];
-    const wrist = landmarks[0];
-    const indexBase = landmarks[5];
+/* Utility */
+function dist(a,b){
+  return Math.hypot(a.x-b.x, a.y-b.y);
+}
 
-    const dx = indexBase.x - wrist.x;
-    targetRotationY = dx * Math.PI * 2;
-  }
+hands.onResults(results=>{
+  if(!results.multiHandLandmarks) return;
+
+  const lm = results.multiHandLandmarks[0];
+
+  const wrist = lm[0];
+  const indexBase = lm[5];
+  const pinkyBase = lm[17];
+  const indexTip = lm[8];
+  const pinkyTip = lm[20];
+
+  /* ===== ROTATION ===== */
+
+  // Horizontal hand movement → Y axis
+  const dx = indexBase.x - wrist.x;
+  targetRotY = dx * Math.PI * 2;
+
+  // Vertical hand movement → X axis
+  const dy = wrist.y - indexBase.y;
+  targetRotX = dy * Math.PI * 1.5;
+
+  /* ===== SCALE (PALM OPENNESS) ===== */
+
+  const palmWidth = dist(indexBase, pinkyBase);
+  const fingerSpread = dist(indexTip, pinkyTip);
+
+  const openness = fingerSpread / palmWidth;
+  targetScale = THREE.MathUtils.clamp(openness * 1.2, 0.6, 1.8);
 });
 
-/* Camera input */
-const cameraInput = new Camera(videoElement, {
-  onFrame: async () => {
-    await hands.send({ image: videoElement });
-  },
-  width: 640,
-  height: 480
+/* Camera */
+const cam = new Camera(video,{
+  onFrame: async()=>{ await hands.send({image:video}); },
+  width:640, height:480
 });
-cameraInput.start();
+cam.start();
 
-/* =======================
-   ANIMATION LOOP
-======================= */
-function animate() {
+/* ======================
+   ANIMATION (SMOOTH)
+====================== */
+function animate(){
   requestAnimationFrame(animate);
 
-  /* smooth rotation */
-  treeGroup.rotation.y += (targetRotationY - treeGroup.rotation.y) * 0.1;
+  tree.rotation.x += (targetRotX - tree.rotation.x) * 0.1;
+  tree.rotation.y += (targetRotY - tree.rotation.y) * 0.1;
 
-  renderer.render(scene, camera);
+  const s = tree.scale.x + (targetScale - tree.scale.x) * 0.1;
+  tree.scale.set(s,s,s);
+
+  renderer.render(scene,camera);
 }
 animate();
 
 /* Resize */
-window.addEventListener("resize", () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
+window.addEventListener("resize",()=>{
+  camera.aspect = window.innerWidth/window.innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(window.innerWidth,window.innerHeight);
 });
 </script>
-
 </body>
 </html>
