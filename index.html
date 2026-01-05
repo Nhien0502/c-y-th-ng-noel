@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Hand Controlled 3D Cube + Tracking View</title>
+<title>Hand Synced Rubik Cube</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <!-- THREE.JS -->
@@ -17,53 +17,46 @@
   body { margin:0; overflow:hidden; background:#000; }
   #video { display:none; }
 
-  /* Tracking window */
-  #tracking-container {
-    position: fixed;
-    right: 12px;
-    bottom: 12px;
-    width: 260px;
-    height: 195px;
-    border: 2px solid #00ffcc;
-    border-radius: 8px;
-    background: #000;
-    box-shadow: 0 0 12px rgba(0,255,200,0.4);
-    z-index: 10;
+  #tracking {
+    position:fixed;
+    right:12px;
+    bottom:12px;
+    width:260px;
+    height:195px;
+    border:2px solid #00ffcc;
+    border-radius:8px;
+    background:#000;
   }
-
-  #tracking-video,
-  #tracking-canvas {
-    position: absolute;
-    width: 100%;
-    height: 100%;
-    border-radius: 6px;
+  #tracking video,
+  #tracking canvas {
+    position:absolute;
+    width:100%;
+    height:100%;
   }
 
   #info {
-    position: fixed;
-    bottom: 12px;
-    left: 12px;
-    color: white;
-    font-family: Arial;
-    opacity: 0.7;
-    font-size: 13px;
+    position:fixed;
+    left:12px;
+    bottom:12px;
+    color:white;
+    font-family:Arial;
+    font-size:13px;
+    opacity:.75;
   }
 </style>
 </head>
 <body>
 
-<!-- Hidden raw video -->
 <video id="video" autoplay playsinline></video>
 
-<!-- Tracking preview -->
-<div id="tracking-container">
-  <video id="tracking-video" autoplay playsinline></video>
-  <canvas id="tracking-canvas"></canvas>
+<div id="tracking">
+  <video id="trackingVideo" autoplay playsinline></video>
+  <canvas id="trackingCanvas"></canvas>
 </div>
 
 <div id="info">
-  Hand → Rotate X/Y<br>
-  Open / Close palm → Scale
+  Cube orientation = hand orientation<br>
+  White face = palm
 </div>
 
 <script>
@@ -88,15 +81,22 @@ light.position.set(5,5,5);
 scene.add(light);
 
 /* =========================
-   3D CUBE
+   RUBIK-STYLE CUBE
+   Face order (BoxGeometry):
+   +X, -X, +Y, -Y, +Z, -Z
 ========================= */
+const materials = [
+  new THREE.MeshStandardMaterial({ color: 0xff0000 }), // +X red
+  new THREE.MeshStandardMaterial({ color: 0xffa500 }), // -X orange
+  new THREE.MeshStandardMaterial({ color: 0xffffff }), // +Y WHITE (PALM)
+  new THREE.MeshStandardMaterial({ color: 0xffff00 }), // -Y yellow
+  new THREE.MeshStandardMaterial({ color: 0x00ff00 }), // +Z green
+  new THREE.MeshStandardMaterial({ color: 0x0000ff })  // -Z blue
+];
+
 const cube = new THREE.Mesh(
-  new THREE.BoxGeometry(1.5, 1.5, 1.5),
-  new THREE.MeshStandardMaterial({
-    color: 0x4aa3ff,
-    metalness: 0.25,
-    roughness: 0.3
-  })
+  new THREE.BoxGeometry(1.6,1.6,1.6),
+  materials
 );
 scene.add(cube);
 
@@ -104,8 +104,8 @@ scene.add(cube);
    MEDIAPIPE HANDS
 ========================= */
 const video = document.getElementById("video");
-const trackingVideo = document.getElementById("tracking-video");
-const trackingCanvas = document.getElementById("tracking-canvas");
+const trackingVideo = document.getElementById("trackingVideo");
+const trackingCanvas = document.getElementById("trackingCanvas");
 const ctx = trackingCanvas.getContext("2d");
 
 trackingCanvas.width = 260;
@@ -122,65 +122,68 @@ hands.setOptions({
   minTrackingConfidence: 0.7
 });
 
-/* Target transforms */
-let targetRotX = 0;
-let targetRotY = 0;
+/* Target quaternion + scale */
+let targetQuat = new THREE.Quaternion();
 let targetScale = 1;
 
-const dist = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
+/* Vector helper */
+function v(p){ return new THREE.Vector3(p.x, -p.y, -p.z); }
+function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
 
-hands.onResults(res => {
-  /* ----- DRAW TRACKING VIEW ----- */
+hands.onResults(res=>{
   ctx.clearRect(0,0,trackingCanvas.width,trackingCanvas.height);
-  ctx.drawImage(
-    trackingVideo,
-    0,0,
-    trackingCanvas.width,
-    trackingCanvas.height
-  );
+  ctx.drawImage(trackingVideo,0,0,trackingCanvas.width,trackingCanvas.height);
 
-  if (!res.multiHandLandmarks) return;
-
+  if(!res.multiHandLandmarks) return;
   const lm = res.multiHandLandmarks[0];
 
-  drawConnectors(ctx, lm, HAND_CONNECTIONS,
-    {color:"#00ffcc", lineWidth:2});
-  drawLandmarks(ctx, lm,
-    {color:"#ff3366", lineWidth:1});
+  drawConnectors(ctx, lm, HAND_CONNECTIONS, {color:"#00ffcc"});
+  drawLandmarks(ctx, lm, {color:"#ff3366"});
 
-  /* ----- TRANSFORMS ----- */
-  const wrist = lm[0];
-  const indexBase = lm[5];
-  const pinkyBase = lm[17];
-  const indexTip = lm[8];
-  const pinkyTip = lm[20];
+  /* ===== HAND ORIENTATION =====
+     Use palm plane:
+     wrist (0), index MCP (5), pinky MCP (17)
+  */
+  const wrist = v(lm[0]);
+  const index = v(lm[5]);
+  const pinky = v(lm[17]);
 
-  const dx = indexBase.x - wrist.x;
-  const dy = wrist.y - indexBase.y;
+  const v1 = index.clone().sub(wrist);
+  const v2 = pinky.clone().sub(wrist);
 
-  targetRotY = dx * Math.PI * 4;
-  targetRotX = dy * Math.PI * 4;
+  // Palm normal (right-hand rule)
+  const normal = v1.clone().cross(v2).normalize();
 
-  const palmWidth = dist(indexBase, pinkyBase);
-  const fingerSpread = dist(indexTip, pinkyTip);
+  // Palm "up" direction
+  const up = v1.clone().normalize();
+
+  // Build rotation matrix
+  const mat = new THREE.Matrix4();
+  mat.lookAt(
+    new THREE.Vector3(0,0,0),
+    normal,
+    up
+  );
+
+  targetQuat.setFromRotationMatrix(mat);
+
+  /* ===== SCALE (PALM OPENNESS) ===== */
+  const palmWidth = dist(lm[5], lm[17]);
+  const fingerSpread = dist(lm[8], lm[20]);
   const openness = fingerSpread / palmWidth;
 
-  targetScale = THREE.MathUtils.clamp(openness * 1.8, 0.5, 2.5);
+  targetScale = THREE.MathUtils.clamp(openness * 1.6, 0.6, 2.4);
 });
 
 /* CAMERA INPUT */
-const cam = new Camera(video, {
-  onFrame: async () => {
-    await hands.send({ image: video });
-  },
-  width: 640,
-  height: 480
+const cam = new Camera(video,{
+  onFrame: async()=>{ await hands.send({image:video}); },
+  width:640, height:480
 });
 cam.start();
 
-/* Mirror same stream for preview */
-navigator.mediaDevices.getUserMedia({ video:true }).then(stream=>{
-  trackingVideo.srcObject = stream;
+navigator.mediaDevices.getUserMedia({video:true}).then(s=>{
+  trackingVideo.srcObject = s;
 });
 
 /* =========================
@@ -189,8 +192,8 @@ navigator.mediaDevices.getUserMedia({ video:true }).then(stream=>{
 function animate(){
   requestAnimationFrame(animate);
 
-  cube.rotation.x += (targetRotX - cube.rotation.x) * 0.25;
-  cube.rotation.y += (targetRotY - cube.rotation.y) * 0.25;
+  // Quaternion sync (smooth but exact)
+  cube.quaternion.slerp(targetQuat, 0.25);
 
   const s = cube.scale.x + (targetScale - cube.scale.x) * 0.25;
   cube.scale.set(s,s,s);
@@ -201,9 +204,9 @@ animate();
 
 /* Resize */
 window.addEventListener("resize",()=>{
-  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.aspect = window.innerWidth/window.innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(window.innerWidth,window.innerHeight);
 });
 </script>
 
