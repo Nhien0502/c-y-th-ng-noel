@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>3D Hand Controlled Tree</title>
+<title>Hand Controlled Cube</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <!-- Three.js -->
@@ -16,20 +16,26 @@
   body { margin:0; overflow:hidden; background:black; }
   #video { display:none; }
   #hint {
-    position:fixed; bottom:15px; width:100%;
-    text-align:center; color:white;
-    font-family:Arial; opacity:.7;
+    position:fixed;
+    bottom:15px;
+    width:100%;
+    text-align:center;
+    color:white;
+    font-family:Arial;
+    opacity:0.7;
   }
 </style>
 </head>
 <body>
 
 <video id="video" autoplay playsinline></video>
-<div id="hint">Move hand to rotate — Open / close palm to zoom</div>
+<div id="hint">
+  Move hand: rotate X/Y • Open/close palm: scale
+</div>
 
 <script>
 /* ======================
-   THREE.JS SCENE
+   THREE.JS SETUP
 ====================== */
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
@@ -37,41 +43,29 @@ scene.background = new THREE.Color(0x000000);
 const camera = new THREE.PerspectiveCamera(
   60, window.innerWidth / window.innerHeight, 0.1, 100
 );
-camera.position.z = 5;
+camera.position.z = 4;
 
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-const light = new THREE.DirectionalLight(0xffffff, 0.8);
-light.position.set(3,5,3);
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const light = new THREE.DirectionalLight(0xffffff, 0.9);
+light.position.set(4,6,3);
 scene.add(light);
 
 /* ======================
-   TREE MODEL (GROUP)
+   CUBE MODEL
 ====================== */
-const tree = new THREE.Group();
-
-function cone(r,h,y){
-  const g = new THREE.ConeGeometry(r,h,32);
-  const m = new THREE.MeshStandardMaterial({color:0x0a8f3c});
-  const mesh = new THREE.Mesh(g,m);
-  mesh.position.y = y;
-  return mesh;
-}
-tree.add(cone(1.2,1.6,0));
-tree.add(cone(1.0,1.4,0.7));
-tree.add(cone(0.8,1.2,1.3));
-
-const trunk = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.15,0.15,0.5),
-  new THREE.MeshStandardMaterial({color:0x8b5a2b})
+const cube = new THREE.Mesh(
+  new THREE.BoxGeometry(1.5, 1.5, 1.5),
+  new THREE.MeshStandardMaterial({
+    color: 0x3399ff,
+    metalness: 0.2,
+    roughness: 0.3
+  })
 );
-trunk.position.y = -1;
-tree.add(trunk);
-
-scene.add(tree);
+scene.add(cube);
 
 /* ======================
    HAND TRACKING
@@ -89,7 +83,7 @@ hands.setOptions({
   minTrackingConfidence: 0.7
 });
 
-/* Target values (like Blender transforms) */
+/* Target transforms */
 let targetRotX = 0;
 let targetRotY = 0;
 let targetScale = 1;
@@ -99,8 +93,8 @@ function dist(a,b){
   return Math.hypot(a.x-b.x, a.y-b.y);
 }
 
-hands.onResults(results=>{
-  if(!results.multiHandLandmarks) return;
+hands.onResults(results => {
+  if (!results.multiHandLandmarks) return;
 
   const lm = results.multiHandLandmarks[0];
 
@@ -110,53 +104,59 @@ hands.onResults(results=>{
   const indexTip = lm[8];
   const pinkyTip = lm[20];
 
-  /* ===== ROTATION ===== */
+  /* ========= ROTATION (HIGH SENSITIVITY) ========= */
 
-  // Horizontal hand movement → Y axis
+  // Horizontal movement → Y rotation
   const dx = indexBase.x - wrist.x;
-  targetRotY = dx * Math.PI * 2;
+  targetRotY = dx * Math.PI * 3.5;   // tăng nhạy
 
-  // Vertical hand movement → X axis
+  // Vertical movement → X rotation
   const dy = wrist.y - indexBase.y;
-  targetRotX = dy * Math.PI * 1.5;
+  targetRotX = dy * Math.PI * 3.0;   // tăng nhạy
 
-  /* ===== SCALE (PALM OPENNESS) ===== */
+  /* ========= SCALE (MORE RESPONSIVE) ========= */
 
   const palmWidth = dist(indexBase, pinkyBase);
   const fingerSpread = dist(indexTip, pinkyTip);
 
   const openness = fingerSpread / palmWidth;
-  targetScale = THREE.MathUtils.clamp(openness * 1.2, 0.6, 1.8);
+  targetScale = THREE.MathUtils.clamp(
+    openness * 1.6,   // scale gain cao hơn
+    0.5,
+    2.2
+  );
 });
 
 /* Camera */
 const cam = new Camera(video,{
   onFrame: async()=>{ await hands.send({image:video}); },
-  width:640, height:480
+  width:640,
+  height:480
 });
 cam.start();
 
 /* ======================
-   ANIMATION (SMOOTH)
+   ANIMATION LOOP
 ====================== */
 function animate(){
   requestAnimationFrame(animate);
 
-  tree.rotation.x += (targetRotX - tree.rotation.x) * 0.1;
-  tree.rotation.y += (targetRotY - tree.rotation.y) * 0.1;
+  // Faster response (less damping)
+  cube.rotation.x += (targetRotX - cube.rotation.x) * 0.2;
+  cube.rotation.y += (targetRotY - cube.rotation.y) * 0.2;
 
-  const s = tree.scale.x + (targetScale - tree.scale.x) * 0.1;
-  tree.scale.set(s,s,s);
+  const s = cube.scale.x + (targetScale - cube.scale.x) * 0.2;
+  cube.scale.set(s, s, s);
 
-  renderer.render(scene,camera);
+  renderer.render(scene, camera);
 }
 animate();
 
 /* Resize */
 window.addEventListener("resize",()=>{
-  camera.aspect = window.innerWidth/window.innerHeight;
+  camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth,window.innerHeight);
+  renderer.setSize(window.innerWidth, window.innerHeight);
 });
 </script>
 </body>
