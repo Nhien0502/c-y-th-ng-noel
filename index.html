@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Hand Tracking 3D Christmas Tree</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Three.js -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+
+  <!-- MediaPipe Hands -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+    }
+    #video {
+      display: none;
+    }
+    #hint {
+      position: fixed;
+      bottom: 20px;
+      width: 100%;
+      text-align: center;
+      color: white;
+      font-family: Arial, sans-serif;
+      opacity: 0.8;
+    }
+  </style>
+</head>
+<body>
+
+<video id="video" autoplay playsinline></video>
+<div id="hint">Raise and rotate your hand to spin the tree</div>
+
+<script>
+/* =======================
+   THREE.JS SETUP
+======================= */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+
+const camera = new THREE.PerspectiveCamera(
+  60,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  100
+);
+camera.position.z = 4;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+/* Light */
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(3, 5, 2);
+scene.add(dirLight);
+
+/* =======================
+   CHRISTMAS TREE
+======================= */
+const treeGroup = new THREE.Group();
+
+/* Tree layers */
+function createCone(radius, height, y) {
+  const geo = new THREE.ConeGeometry(radius, height, 32);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x0a8f3c });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.y = y;
+  return mesh;
+}
+
+treeGroup.add(createCone(1.2, 1.6, 0));
+treeGroup.add(createCone(1.0, 1.4, 0.6));
+treeGroup.add(createCone(0.8, 1.2, 1.1));
+
+/* Trunk */
+const trunk = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.15, 0.15, 0.5),
+  new THREE.MeshStandardMaterial({ color: 0x8b5a2b })
+);
+trunk.position.y = -1;
+treeGroup.add(trunk);
+
+/* Star */
+const star = new THREE.Mesh(
+  new THREE.OctahedronGeometry(0.2),
+  new THREE.MeshStandardMaterial({ color: 0xffd700, emissive: 0xffaa00 })
+);
+star.position.y = 2;
+treeGroup.add(star);
+
+scene.add(treeGroup);
+
+/* =======================
+   MEDIAPIPE HANDS
+======================= */
+const videoElement = document.getElementById("video");
+
+const hands = new Hands({
+  locateFile: (file) =>
+    `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.7
+});
+
+let targetRotationY = 0;
+
+hands.onResults((results) => {
+  if (results.multiHandLandmarks) {
+    const landmarks = results.multiHandLandmarks[0];
+    const wrist = landmarks[0];
+    const indexBase = landmarks[5];
+
+    const dx = indexBase.x - wrist.x;
+    targetRotationY = dx * Math.PI * 2;
+  }
+});
+
+/* Camera input */
+const cameraInput = new Camera(videoElement, {
+  onFrame: async () => {
+    await hands.send({ image: videoElement });
+  },
+  width: 640,
+  height: 480
+});
+cameraInput.start();
+
+/* =======================
+   ANIMATION LOOP
+======================= */
+function animate() {
+  requestAnimationFrame(animate);
+
+  /* smooth rotation */
+  treeGroup.rotation.y += (targetRotationY - treeGroup.rotation.y) * 0.1;
+
+  renderer.render(scene, camera);
+}
+animate();
+
+/* Resize */
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+
+</body>
+</html>
