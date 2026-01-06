@@ -2,61 +2,27 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Hand Synced Rubik Cube</title>
+<title>Hand Crush Coke</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<!-- THREE.JS -->
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-
-<!-- MEDIAPIPE -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
 
 <style>
-  body { margin:0; overflow:hidden; background:#000; }
-  #video { display:none; }
-
-  #tracking {
-    position:fixed;
-    right:12px;
-    bottom:12px;
-    width:260px;
-    height:195px;
-    border:2px solid #00ffcc;
-    border-radius:8px;
-    background:#000;
-  }
-  #tracking video,
-  #tracking canvas {
-    position:absolute;
-    width:100%;
-    height:100%;
-  }
-
-  #info {
-    position:fixed;
-    left:12px;
-    bottom:12px;
-    color:white;
-    font-family:Arial;
-    font-size:13px;
-    opacity:.75;
-  }
+  body{margin:0; overflow:hidden; background:#222;}
+  #video{display:none;}
+  #tracking{position:fixed; right:12px; bottom:12px; width:260px; height:195px; border:2px solid #00ffcc; border-radius:8px;}
+  #tracking video,#tracking canvas{position:absolute;width:100%;height:100%;}
 </style>
 </head>
 <body>
 
 <video id="video" autoplay playsinline></video>
-
 <div id="tracking">
   <video id="trackingVideo" autoplay playsinline></video>
   <canvas id="trackingCanvas"></canvas>
-</div>
-
-<div id="info">
-  Cube orientation = hand orientation<br>
-  White face = palm
 </div>
 
 <script>
@@ -64,41 +30,32 @@
    THREE.JS SCENE
 ========================= */
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x000000);
+scene.background = new THREE.Color(0x222222);
 
-const camera = new THREE.PerspectiveCamera(
-  60, window.innerWidth / window.innerHeight, 0.1, 100
-);
-camera.position.z = 4;
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 100);
+camera.position.set(0,1.5,5);
 
-const renderer = new THREE.WebGLRenderer({ antialias:true });
+const renderer = new THREE.WebGLRenderer({antialias:true});
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-const light = new THREE.DirectionalLight(0xffffff, 0.9);
+/* LIGHTS */
+scene.add(new THREE.AmbientLight(0xffffff,0.7));
+const light = new THREE.DirectionalLight(0xffffff,0.8);
 light.position.set(5,5,5);
 scene.add(light);
 
-/* =========================
-   RUBIK-STYLE CUBE
-   Face order (BoxGeometry):
-   +X, -X, +Y, -Y, +Z, -Z
-========================= */
-const materials = [
-  new THREE.MeshStandardMaterial({ color: 0xff0000 }), // +X red
-  new THREE.MeshStandardMaterial({ color: 0xffa500 }), // -X orange
-  new THREE.MeshStandardMaterial({ color: 0xffffff }), // +Y WHITE (PALM)
-  new THREE.MeshStandardMaterial({ color: 0xffff00 }), // -Y yellow
-  new THREE.MeshStandardMaterial({ color: 0x00ff00 }), // +Z green
-  new THREE.MeshStandardMaterial({ color: 0x0000ff })  // -Z blue
-];
+/* TABLE */
+const tableMat = new THREE.MeshStandardMaterial({color:0x8B4513});
+const table = new THREE.Mesh(new THREE.BoxGeometry(6,0.3,3), tableMat);
+table.position.y = -0.15;
+scene.add(table);
 
-const cube = new THREE.Mesh(
-  new THREE.BoxGeometry(1.6,1.6,1.6),
-  materials
-);
-scene.add(cube);
+/* COKE CAN (cylinder) */
+const canMat = new THREE.MeshStandardMaterial({color:0xE41B17});
+const can = new THREE.Mesh(new THREE.CylinderGeometry(0.3,0.3,1.2,32), canMat);
+can.position.y = 0.6;
+scene.add(can);
 
 /* =========================
    MEDIAPIPE HANDS
@@ -107,84 +64,42 @@ const video = document.getElementById("video");
 const trackingVideo = document.getElementById("trackingVideo");
 const trackingCanvas = document.getElementById("trackingCanvas");
 const ctx = trackingCanvas.getContext("2d");
-
 trackingCanvas.width = 260;
 trackingCanvas.height = 195;
 
 const hands = new Hands({
   locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
 });
+hands.setOptions({maxNumHands:1, modelComplexity:1, minDetectionConfidence:0.7, minTrackingConfidence:0.7});
 
-hands.setOptions({
-  maxNumHands: 1,
-  modelComplexity: 1,
-  minDetectionConfidence: 0.7,
-  minTrackingConfidence: 0.7
-});
+let targetScaleX = 1;
+let targetScaleZ = 1;
 
-/* Target quaternion + scale */
-let targetQuat = new THREE.Quaternion();
-let targetScale = 1;
-
-/* Vector helper */
-function v(p){ return new THREE.Vector3(p.x, -p.y, -p.z); }
 function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
 
 hands.onResults(res=>{
   ctx.clearRect(0,0,trackingCanvas.width,trackingCanvas.height);
   ctx.drawImage(trackingVideo,0,0,trackingCanvas.width,trackingCanvas.height);
-
   if(!res.multiHandLandmarks) return;
   const lm = res.multiHandLandmarks[0];
+  drawConnectors(ctx,lm,HAND_CONNECTIONS,{color:"#00ffcc"});
+  drawLandmarks(ctx,lm,{color:"#ff3366"});
 
-  drawConnectors(ctx, lm, HAND_CONNECTIONS, {color:"#00ffcc"});
-  drawLandmarks(ctx, lm, {color:"#ff3366"});
+  // Tính openness (thumb tip vs pinky tip)
+  const thumbTip = lm[4];
+  const pinkyTip = lm[20];
+  let openness = dist(thumbTip,pinkyTip);
+  openness = Math.min(Math.max(openness,0.05),0.25); // clamp
 
-  /* ===== HAND ORIENTATION =====
-     Use palm plane:
-     wrist (0), index MCP (5), pinky MCP (17)
-  */
-  const wrist = v(lm[0]);
-  const index = v(lm[5]);
-  const pinky = v(lm[17]);
-
-  const v1 = index.clone().sub(wrist);
-  const v2 = pinky.clone().sub(wrist);
-
-  // Palm normal (right-hand rule)
-  const normal = v1.clone().cross(v2).normalize();
-
-  // Palm "up" direction
-  const up = v1.clone().normalize();
-
-  // Build rotation matrix
-  const mat = new THREE.Matrix4();
-  mat.lookAt(
-    new THREE.Vector3(0,0,0),
-    normal,
-    up
-  );
-
-  targetQuat.setFromRotationMatrix(mat);
-
-  /* ===== SCALE (PALM OPENNESS) ===== */
-  const palmWidth = dist(lm[5], lm[17]);
-  const fingerSpread = dist(lm[8], lm[20]);
-  const openness = fingerSpread / palmWidth;
-
-  targetScale = THREE.MathUtils.clamp(openness * 1.6, 0.6, 2.4);
+  // Khi tay nắm (openness nhỏ) → scale X/Z nhỏ
+  targetScaleX = targetScaleZ = 1 + (0.1 - openness)*5; // chỉnh gain cho bẹp
 });
 
 /* CAMERA INPUT */
-const cam = new Camera(video,{
-  onFrame: async()=>{ await hands.send({image:video}); },
-  width:640, height:480
-});
+const cam = new Camera(video,{onFrame:async()=>{await hands.send({image:video});}, width:640,height:480});
 cam.start();
 
-navigator.mediaDevices.getUserMedia({video:true}).then(s=>{
-  trackingVideo.srcObject = s;
-});
+navigator.mediaDevices.getUserMedia({video:true}).then(s=>trackingVideo.srcObject=s);
 
 /* =========================
    ANIMATION LOOP
@@ -192,11 +107,9 @@ navigator.mediaDevices.getUserMedia({video:true}).then(s=>{
 function animate(){
   requestAnimationFrame(animate);
 
-  // Quaternion sync (smooth but exact)
-  cube.quaternion.slerp(targetQuat, 0.25);
-
-  const s = cube.scale.x + (targetScale - cube.scale.x) * 0.25;
-  cube.scale.set(s,s,s);
+  // Mượt
+  can.scale.x += (targetScaleX - can.scale.x)*0.2;
+  can.scale.z += (targetScaleZ - can.scale.z)*0.2;
 
   renderer.render(scene,camera);
 }
