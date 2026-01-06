@@ -1,171 +1,210 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Five-Finger Can Crush</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-
+<meta charset="UTF-8" />
+<title>Telekinetic Coke Can</title>
 <style>
-body{margin:0;overflow:hidden;background:#111;}
-#track{
-  position:fixed;right:12px;bottom:12px;
-  width:220px;height:165px;border:2px solid #00ffaa;
-}
-#video,#overlay{
-  position:absolute;width:100%;height:100%;object-fit:cover;
-}
+  body { margin:0; overflow:hidden; background:#111; }
+  #debug {
+    position:fixed;
+    right:10px; bottom:10px;
+    width:200px; height:150px;
+    border:2px solid #fff;
+  }
 </style>
 </head>
 <body>
 
-<div id="track">
-  <video id="video" autoplay playsinline muted></video>
-  <canvas id="overlay"></canvas>
-</div>
+<video id="video" autoplay playsinline style="display:none"></video>
+<canvas id="debug"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <script>
-/* ======================
-   THREE SCENE
-====================== */
-const scene=new THREE.Scene();
-scene.background=new THREE.Color(0x111111);
+/* =========================
+   THREE.JS SCENE
+========================= */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
 
-const cam3D=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,0.1,100);
-cam3D.position.set(0,1.4,4);
+const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(0,1.5,4);
 
-const renderer=new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(innerWidth,innerHeight);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
-scene.add(new THREE.AmbientLight(0xffffff,0.8));
+scene.add(new THREE.DirectionalLight(0xffffff,1.2));
+scene.add(new THREE.AmbientLight(0x555555));
 
-/* ======================
-   CAN GEOMETRY (HIGH RES)
-====================== */
-const R=0.32,H=1.2,RAD=120,HSEG=8;
-const geo=new THREE.CylinderGeometry(R,R,H,RAD,HSEG,true);
-const mat=new THREE.MeshStandardMaterial({color:0xc41414,side:THREE.DoubleSide});
-const can=new THREE.Mesh(geo,mat);
-can.position.y=0.6;
+/* =========================
+   TABLE
+========================= */
+const table = new THREE.Mesh(
+  new THREE.BoxGeometry(5,0.2,5),
+  new THREE.MeshStandardMaterial({color:0x5a3a1a})
+);
+table.position.y = -1;
+scene.add(table);
+
+/* =========================
+   CAN GEOMETRY
+========================= */
+const RAD = 96, H = 40;
+const R = 0.35, HEIGHT = 1.2;
+
+const geo = new THREE.CylinderGeometry(
+  R, R, HEIGHT, RAD, H, true
+);
+geo.rotateY(Math.PI / RAD);
+
+const pos = geo.attributes.position;
+const basePos = pos.array.slice();
+
+const panelDent = new Float32Array(RAD);
+const panelRidge = new Float32Array(RAD);
+const panelHard = new Float32Array(RAD).fill(1);
+
+const mat = new THREE.MeshStandardMaterial({
+  color:0xc1121f,
+  roughness:1,
+  metalness:0,
+  side:THREE.DoubleSide
+});
+
+const can = new THREE.Mesh(geo, mat);
+can.position.y = -0.35;
 scene.add(can);
 
-const pos=geo.attributes.position;
-const base=pos.array.slice();
+/* =========================
+   HAND TRACKING
+========================= */
+let grip = 0, gripVel = 0, lastGrip = 0;
+let fingerAngles = [];
 
-/* Panel memory */
-const panelDent=new Float32Array(RAD);
-const panelHard=new Float32Array(RAD).map(()=>0.4+Math.random()*0.6);
+const video = document.getElementById("video");
+const debug = document.getElementById("debug");
+const dctx = debug.getContext("2d");
 
-/* ======================
-   MEDIAPIPE HANDS
-====================== */
-const video=document.getElementById("video");
-const canvas=document.getElementById("overlay");
-const ctx=canvas.getContext("2d");
-canvas.width=220;canvas.height=165;
-
-const hands=new Hands({
-  locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+const hands = new Hands({
+  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
 });
 hands.setOptions({
   maxNumHands:1,
-  modelComplexity:0,
+  modelComplexity:1,
   minDetectionConfidence:0.7,
   minTrackingConfidence:0.7
 });
 
-let handVisible=false;
-let grip=0,lastGrip=0;
-let fingerAngles=[];
+hands.onResults(res=>{
+  dctx.clearRect(0,0,debug.width,debug.height);
 
-function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
+  if(!res.multiHandLandmarks) return;
 
-hands.onResults(r=>{
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  ctx.drawImage(video,0,0,canvas.width,canvas.height);
-
-  if(!r.multiHandLandmarks){
-    handVisible=false;
-    return;
-  }
-  handVisible=true;
-  const lm=r.multiHandLandmarks[0];
-  drawConnectors(ctx,lm,HAND_CONNECTIONS,{color:"#00ffaa"});
-  drawLandmarks(ctx,lm,{color:"#ff3355"});
-
-  grip=THREE.MathUtils.clamp((0.22-dist(lm[4],lm[20]))/0.15,0,1);
-
-  // 5 fingertips → 5 force vectors
-  const tips=[4,8,12,16,20];
-  fingerAngles=tips.map(i=>{
-    const x=lm[i].x-0.5;
-    return (Math.atan2(0,x)+Math.PI)/(2*Math.PI);
+  const lm = res.multiHandLandmarks[0];
+  dctx.strokeStyle="lime";
+  lm.forEach(p=>{
+    dctx.beginPath();
+    dctx.arc(p.x*debug.width,p.y*debug.height,3,0,Math.PI*2);
+    dctx.stroke();
   });
+
+  const palm = lm[0];
+  const tips = [4,8,12,16,20];
+
+  let sum = 0;
+  fingerAngles = [];
+
+  tips.forEach(i=>{
+    const dx = lm[i].x - palm.x;
+    const dy = lm[i].y - palm.y;
+    const d = Math.hypot(dx,dy);
+    sum += d;
+    fingerAngles.push((Math.atan2(dx,dy)+Math.PI)/(2*Math.PI));
+  });
+
+  grip = THREE.MathUtils.clamp(
+    1 - sum / 1.2,
+    0, 1
+  );
 });
 
 new Camera(video,{
-  onFrame:async()=>{await hands.send({image:video});},
+  onFrame: async()=>hands.send({image:video}),
   width:640,height:480
 }).start();
 
-/* ======================
-   DEFORMATION LOOP
-====================== */
-function animate(){
-  requestAnimationFrame(animate);
+/* =========================
+   DEFORMATION MODEL
+   Ratio hand : can = 1 : 2
+========================= */
+function deform(){
+  gripVel = grip - lastGrip;
+  lastGrip = grip;
 
-  const velocity=Math.abs(grip-lastGrip);
-  lastGrip=grip;
+  if(gripVel <= 0) return;
 
-  if(handVisible && grip>0.02){
-    fingerAngles.forEach(a=>{
-      const sector=Math.floor(a*RAD);
-      for(let i=-3;i<=3;i++){
-        const s=(sector+i+RAD)%RAD;
-        const weight=1-Math.abs(i)/3;
-        const force=grip*velocity*panelHard[s]*0.05*weight;
-        panelDent[s]=Math.min(panelDent[s]+force,0.25);
-      }
-    });
-  }
+  const FORCE_RATIO = 2.0;
+
+  fingerAngles.forEach(a=>{
+    const c = Math.floor(a * RAD);
+    for(let i=-4;i<=4;i++){
+      const s = (c+i+RAD)%RAD;
+      const w = 1 - Math.abs(i)/4;
+      const f = gripVel * FORCE_RATIO * w * panelHard[s];
+
+      panelDent[s] = Math.min(panelDent[s] + f, 0.35);
+      if(Math.abs(i)===2) panelRidge[s] += f*0.6;
+      panelHard[s] *= 0.985;
+    }
+  });
 
   for(let i=0;i<pos.count;i++){
-    const idx=i*3;
-    const x0=base[idx],y0=base[idx+1],z0=base[idx+2];
-    const r=Math.hypot(x0,z0);
-    if(r<0.001)continue;
-
-    if(Math.abs(y0)>H*0.46){
-      pos.array[idx]=x0;
-      pos.array[idx+2]=z0;
+    const y = basePos[i*3+1];
+    if(Math.abs(y) > HEIGHT*0.45){
+      pos.array[i*3]   = basePos[i*3];
+      pos.array[i*3+1] = basePos[i*3+1];
+      pos.array[i*3+2] = basePos[i*3+2];
       continue;
     }
 
-    const ang=(Math.atan2(z0,x0)+Math.PI)/(2*Math.PI);
-    const s=Math.floor(ang*RAD)%RAD;
+    const x = basePos[i*3], z = basePos[i*3+2];
+    const ang = (Math.atan2(x,z)+Math.PI)/(2*Math.PI);
+    const s = Math.floor(ang*RAD)%RAD;
 
-    const nx=x0/r,nz=z0/r;
-    pos.array[idx]=nx*(R-panelDent[s]);
-    pos.array[idx+2]=nz*(R-panelDent[s]);
+    const dent = panelDent[s];
+    const ridge = panelRidge[s];
+
+    const nx = x / R, nz = z / R;
+    const radial = R - dent;
+    const ridgePush = ridge * Math.sign(Math.sin(ang*Math.PI*2));
+
+    pos.array[i*3]   = nx*radial + nz*ridgePush;
+    pos.array[i*3+2] = nz*radial - nx*ridgePush;
   }
 
-  pos.needsUpdate=true;
-  renderer.render(scene,cam3D);
+  pos.needsUpdate = true;
+}
+
+/* =========================
+   LOOP
+========================= */
+function animate(){
+  requestAnimationFrame(animate);
+  deform();
+  can.rotation.y += 0.002;
+  renderer.render(scene,camera);
 }
 animate();
 
 addEventListener("resize",()=>{
-  cam3D.aspect=innerWidth/innerHeight;
-  cam3D.updateProjectionMatrix();
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
   renderer.setSize(innerWidth,innerHeight);
 });
 </script>
-
 </body>
 </html>
 
