@@ -2,19 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Hand Crush Coke</title>
+<title>Crushable Coke Can</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
 
 <style>
-  body{margin:0; overflow:hidden; background:#222;}
-  #video{display:none;}
-  #tracking{position:fixed; right:12px; bottom:12px; width:260px; height:195px; border:2px solid #00ffcc; border-radius:8px;}
-  #tracking video,#tracking canvas{position:absolute;width:100%;height:100%;}
+body{margin:0; overflow:hidden; background:#222;}
+#video{display:none;}
+#tracking{position:fixed; right:12px; bottom:12px; width:260px; height:195px; border:2px solid #00ffcc; border-radius:8px;}
+#tracking video,#tracking canvas{position:absolute;width:100%;height:100%;}
 </style>
 </head>
 <body>
@@ -26,18 +27,21 @@
 </div>
 
 <script>
-/* =========================
-   THREE.JS SCENE
-========================= */
+/* =======================
+   THREE.JS SETUP
+======================= */
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x222222);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100);
 camera.position.set(0,1.5,5);
 
 const renderer = new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setSize(window.innerWidth,window.innerHeight);
 document.body.appendChild(renderer.domElement);
+
+const controls = new THREE.OrbitControls(camera,renderer.domElement);
+controls.enablePan=false;
 
 /* LIGHTS */
 scene.add(new THREE.AmbientLight(0xffffff,0.7));
@@ -46,78 +50,99 @@ light.position.set(5,5,5);
 scene.add(light);
 
 /* TABLE */
-const tableMat = new THREE.MeshStandardMaterial({color:0x8B4513});
-const table = new THREE.Mesh(new THREE.BoxGeometry(6,0.3,3), tableMat);
-table.position.y = -0.15;
+const table = new THREE.Mesh(
+  new THREE.BoxGeometry(6,0.3,3),
+  new THREE.MeshStandardMaterial({color:0x8B4513})
+);
+table.position.y=-0.15;
 scene.add(table);
 
-/* COKE CAN (cylinder) */
-const canMat = new THREE.MeshStandardMaterial({color:0xE41B17});
-const can = new THREE.Mesh(new THREE.CylinderGeometry(0.3,0.3,1.2,32), canMat);
-can.position.y = 0.6;
+/* COKE CAN (Cylinder Rỗng) */
+const height = 1.2, radius = 0.3, radialSegments=32;
+const geometry = new THREE.CylinderGeometry(radius,radius,height,radialSegments,1,true); // open-ended
+// store initial positions
+const basePositions = geometry.attributes.position.array.slice();
+
+const textureCanvas = document.createElement('canvas');
+textureCanvas.width = 256; textureCanvas.height = 512;
+const ctx = textureCanvas.getContext('2d');
+ctx.fillStyle = '#E41B17'; ctx.fillRect(0,0,256,512);
+ctx.fillStyle='#FFFFFF';
+ctx.font='bold 40px Arial';
+ctx.textAlign='center';
+ctx.fillText('COKE',128,150);
+// gợn sóng
+ctx.beginPath(); ctx.moveTo(0,300); ctx.quadraticCurveTo(64,280,128,300); ctx.quadraticCurveTo(192,320,256,300); ctx.lineWidth=5; ctx.strokeStyle='white'; ctx.stroke();
+
+const tex = new THREE.CanvasTexture(textureCanvas);
+
+const material = new THREE.MeshStandardMaterial({
+  color:0xE41B17,
+  metalness:0.7,
+  roughness:0.3,
+  map: tex,
+  side: THREE.DoubleSide
+});
+const can = new THREE.Mesh(geometry, material);
+can.position.y=0.6;
 scene.add(can);
 
-/* =========================
+/* =======================
    MEDIAPIPE HANDS
-========================= */
-const video = document.getElementById("video");
-const trackingVideo = document.getElementById("trackingVideo");
-const trackingCanvas = document.getElementById("trackingCanvas");
-const ctx = trackingCanvas.getContext("2d");
-trackingCanvas.width = 260;
-trackingCanvas.height = 195;
+======================= */
+const video = document.getElementById('video');
+const trackingVideo = document.getElementById('trackingVideo');
+const trackingCanvas = document.getElementById('trackingCanvas');
+const ctxTrack = trackingCanvas.getContext('2d');
+trackingCanvas.width = 260; trackingCanvas.height = 195;
 
-const hands = new Hands({
-  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
-});
+const hands = new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
 hands.setOptions({maxNumHands:1, modelComplexity:1, minDetectionConfidence:0.7, minTrackingConfidence:0.7});
 
-let targetScaleX = 1;
-let targetScaleZ = 1;
+let openness=0.2; // 0.05=close, 0.25=open
 
 function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
 
 hands.onResults(res=>{
-  ctx.clearRect(0,0,trackingCanvas.width,trackingCanvas.height);
-  ctx.drawImage(trackingVideo,0,0,trackingCanvas.width,trackingCanvas.height);
+  ctxTrack.clearRect(0,0,trackingCanvas.width,trackingCanvas.height);
+  ctxTrack.drawImage(trackingVideo,0,0,trackingCanvas.width,trackingCanvas.height);
   if(!res.multiHandLandmarks) return;
-  const lm = res.multiHandLandmarks[0];
-  drawConnectors(ctx,lm,HAND_CONNECTIONS,{color:"#00ffcc"});
-  drawLandmarks(ctx,lm,{color:"#ff3366"});
+  const lm=res.multiHandLandmarks[0];
+  drawConnectors(ctxTrack,lm,HAND_CONNECTIONS,{color:"#00ffcc"});
+  drawLandmarks(ctxTrack,lm,{color:"#ff3366"});
 
-  // Tính openness (thumb tip vs pinky tip)
-  const thumbTip = lm[4];
-  const pinkyTip = lm[20];
-  let openness = dist(thumbTip,pinkyTip);
-  openness = Math.min(Math.max(openness,0.05),0.25); // clamp
-
-  // Khi tay nắm (openness nhỏ) → scale X/Z nhỏ
-  targetScaleX = targetScaleZ = 1 + (0.1 - openness)*5; // chỉnh gain cho bẹp
+  const thumbTip = lm[4], pinkyTip = lm[20];
+  openness = dist(thumbTip,pinkyTip);
+  openness = Math.min(Math.max(openness,0.05),0.25);
 });
 
 /* CAMERA INPUT */
 const cam = new Camera(video,{onFrame:async()=>{await hands.send({image:video});}, width:640,height:480});
 cam.start();
-
 navigator.mediaDevices.getUserMedia({video:true}).then(s=>trackingVideo.srcObject=s);
 
-/* =========================
-   ANIMATION LOOP
-========================= */
+/* =======================
+   ANIMATION LOOP (Bóp CAN)
+======================= */
 function animate(){
   requestAnimationFrame(animate);
 
-  // Mượt
-  can.scale.x += (targetScaleX - can.scale.x)*0.2;
-  can.scale.z += (targetScaleZ - can.scale.z)*0.2;
+  // Lấy array vertices
+  const pos = geometry.attributes.position.array;
+  for(let i=0;i<pos.length;i+=3){
+    const x0=basePositions[i], z0=basePositions[i+2];
+    const scale = 1 - (0.2 - openness)*1.5; // gain bẹp
+    pos[i] = x0*scale;
+    pos[i+2] = z0*scale;
+  }
+  geometry.attributes.position.needsUpdate = true;
 
   renderer.render(scene,camera);
 }
 animate();
 
-/* Resize */
-window.addEventListener("resize",()=>{
-  camera.aspect = window.innerWidth/window.innerHeight;
+window.addEventListener('resize',()=>{
+  camera.aspect=window.innerWidth/window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth,window.innerHeight);
 });
