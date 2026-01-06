@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Advanced Metal Can Deformation</title>
+<title>Realistic Coke Can Crush</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
@@ -11,28 +11,34 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
 
 <style>
-body{margin:0;overflow:hidden;background:#111;}
-#tracking{
-  position:fixed;right:12px;bottom:12px;
-  width:240px;height:180px;
-  border:2px solid #00ffaa;border-radius:6px;
+body { margin:0; overflow:hidden; background:#111; }
+#track {
+  position:fixed;
+  right:12px;
+  bottom:12px;
+  width:220px;
+  height:165px;
+  border:2px solid #00ffaa;
 }
-#video,#overlay{
-  position:absolute;width:100%;height:100%;object-fit:cover;
+#video, #overlay {
+  position:absolute;
+  width:100%;
+  height:100%;
+  object-fit:cover;
 }
 </style>
 </head>
 <body>
 
-<div id="tracking">
+<div id="track">
   <video id="video" autoplay playsinline muted></video>
   <canvas id="overlay"></canvas>
 </div>
 
 <script>
-/* ======================
-   THREE.JS SCENE
-====================== */
+/* =======================
+   THREE SCENE
+======================= */
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x111111);
 
@@ -40,13 +46,13 @@ const cam3D = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 100);
 cam3D.position.set(0,1.4,4);
 
 const renderer = new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(innerWidth,innerHeight);
+renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
 scene.add(new THREE.AmbientLight(0xffffff,0.8));
-const dl = new THREE.DirectionalLight(0xffffff,0.6);
-dl.position.set(4,5,3);
-scene.add(dl);
+const light = new THREE.DirectionalLight(0xffffff,0.6);
+light.position.set(4,5,3);
+scene.add(light);
 
 /* TABLE */
 const table = new THREE.Mesh(
@@ -56,12 +62,13 @@ const table = new THREE.Mesh(
 table.position.y=-0.15;
 scene.add(table);
 
-/* ======================
-   HIGH DETAIL CAN
-====================== */
+/* =======================
+   HIGH RES CAN (THIN WALL)
+======================= */
 const R=0.32, H=1.2;
-const RADIAL=80, HEIGHT_SEG=6;
-const geo = new THREE.CylinderGeometry(R,R,H,RADIAL,HEIGHT_SEG,true);
+const RAD=96, HSEG=8;
+
+const geo = new THREE.CylinderGeometry(R,R,H,RAD,HSEG,true);
 const mat = new THREE.MeshStandardMaterial({
   color:0xc41414,
   side:THREE.DoubleSide,
@@ -75,60 +82,61 @@ scene.add(can);
 const pos = geo.attributes.position;
 const base = pos.array.slice();
 
-/* Dent data per radial sector */
-const sectorDent = new Array(RADIAL).fill(0).map(()=>0);
-const sectorWeak = new Array(RADIAL).fill(0).map(()=>0.4+Math.random()*0.6);
+/* Panel-based dent memory */
+const panelDent = new Array(RAD).fill(0);
+const panelHardness = new Array(RAD).fill(0).map(()=>0.4+Math.random()*0.6);
 
-/* ======================
-   MEDIAPIPE HANDS
-====================== */
+/* =======================
+   MEDIAPIPE (LEAN)
+======================= */
 const video = document.getElementById("video");
 const canvas = document.getElementById("overlay");
 const ctx = canvas.getContext("2d");
-canvas.width=240; canvas.height=180;
+canvas.width=220; canvas.height=165;
 
 const hands = new Hands({
   locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
 });
 hands.setOptions({
   maxNumHands:1,
-  modelComplexity:0, // optimized
+  modelComplexity:0,
   minDetectionConfidence:0.7,
   minTrackingConfidence:0.7
 });
 
 let grip=0, lastGrip=0;
+let handX=0.5;
+let handVisible=false;
 let lastTime=performance.now();
-let handPresent=false;
 
-function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
+function dist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
 
 hands.onResults(r=>{
-  ctx.clearRect(0,0,240,180);
-  ctx.drawImage(video,0,0,240,180);
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(video,0,0,canvas.width,canvas.height);
 
   if(!r.multiHandLandmarks){
-    handPresent=false;
+    handVisible=false;
     return;
   }
-  handPresent=true;
+
+  handVisible=true;
   const lm=r.multiHandLandmarks[0];
   drawConnectors(ctx,lm,HAND_CONNECTIONS,{color:"#00ffaa"});
   drawLandmarks(ctx,lm,{color:"#ff3355"});
 
-  const d = dist(lm[4],lm[20]);
-  grip = THREE.MathUtils.clamp((0.22-d)/0.15,0,1);
+  grip = THREE.MathUtils.clamp((0.22 - dist(lm[4],lm[20]))/0.15,0,1);
+  handX = lm[9].x; // palm center (horizontal)
 });
 
-/* Camera */
 new Camera(video,{
   onFrame:async()=>{await hands.send({image:video});},
   width:640,height:480
 }).start();
 
-/* ======================
-   DEFORMATION LOOP
-====================== */
+/* =======================
+   PLASTIC DEFORMATION
+======================= */
 function animate(){
   requestAnimationFrame(animate);
 
@@ -136,13 +144,22 @@ function animate(){
   const dt=(now-lastTime)/1000;
   lastTime=now;
 
-  let velocity = Math.abs(grip-lastGrip)/(dt+1e-6);
+  const velocity=Math.abs(grip-lastGrip)/(dt+1e-6);
   lastGrip=grip;
 
-  if(handPresent){
-    for(let s=0;s<RADIAL;s++){
-      const force = grip*velocity*sectorWeak[s]*0.002;
-      sectorDent[s]=Math.min(sectorDent[s]+force,0.18);
+  if(handVisible){
+    const impactSector=Math.floor(handX*RAD);
+
+    for(let i=0;i<RAD;i++){
+      const distS=Math.min(
+        Math.abs(i-impactSector),
+        RAD-Math.abs(i-impactSector)
+      );
+
+      if(distS>4) continue; // local only
+
+      const force=grip*velocity*panelHardness[i]*0.002*(1-distS/4);
+      panelDent[i]=Math.min(panelDent[i]+force,0.2);
     }
   }
 
@@ -153,21 +170,18 @@ function animate(){
     const r=Math.hypot(x0,z0);
     if(r<0.001) continue;
 
-    /* Lock top & bottom edges */
-    if(Math.abs(y0) > H*0.45){
+    if(Math.abs(y0)>H*0.46){
       pos.array[idx]=x0;
       pos.array[idx+2]=z0;
       continue;
     }
 
     const angle=(Math.atan2(z0,x0)+Math.PI)/(2*Math.PI);
-    const sector=Math.floor(angle*RADIAL)%RADIAL;
+    const sector=Math.floor(angle*RAD)%RAD;
 
-    const dent = sectorDent[sector];
     const nx=x0/r, nz=z0/r;
-
-    pos.array[idx]=nx*(R-dent);
-    pos.array[idx+2]=nz*(R-dent);
+    pos.array[idx]=nx*(R-panelDent[sector]);
+    pos.array[idx+2]=nz*(R-panelDent[sector]);
   }
 
   pos.needsUpdate=true;
@@ -184,3 +198,4 @@ addEventListener("resize",()=>{
 
 </body>
 </html>
+
