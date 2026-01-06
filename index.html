@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Metal Can Crush – Stable Tracking</title>
+<title>Advanced Metal Can Deformation</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
@@ -11,66 +11,57 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
 
 <style>
-body { margin:0; overflow:hidden; background:#111; }
-
-#tracking {
-  position:fixed;
-  right:12px;
-  bottom:12px;
-  width:240px;
-  height:180px;
-  border:2px solid #00ffaa;
-  border-radius:6px;
-  overflow:hidden;
+body{margin:0;overflow:hidden;background:#111;}
+#tracking{
+  position:fixed;right:12px;bottom:12px;
+  width:240px;height:180px;
+  border:2px solid #00ffaa;border-radius:6px;
 }
-
-#inputVideo, #overlay {
-  position:absolute;
-  width:100%;
-  height:100%;
-  object-fit:cover;
+#video,#overlay{
+  position:absolute;width:100%;height:100%;object-fit:cover;
 }
 </style>
 </head>
 <body>
 
 <div id="tracking">
-  <video id="inputVideo" autoplay playsinline muted></video>
+  <video id="video" autoplay playsinline muted></video>
   <canvas id="overlay"></canvas>
 </div>
 
 <script>
-/* =======================
+/* ======================
    THREE.JS SCENE
-======================= */
+====================== */
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x111111);
 
-const camera3D = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 100);
-camera3D.position.set(0,1.4,4);
+const cam3D = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 100);
+cam3D.position.set(0,1.4,4);
 
 const renderer = new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(innerWidth, innerHeight);
+renderer.setSize(innerWidth,innerHeight);
 document.body.appendChild(renderer.domElement);
 
 scene.add(new THREE.AmbientLight(0xffffff,0.8));
-const dir = new THREE.DirectionalLight(0xffffff,0.6);
-dir.position.set(4,5,3);
-scene.add(dir);
+const dl = new THREE.DirectionalLight(0xffffff,0.6);
+dl.position.set(4,5,3);
+scene.add(dl);
 
 /* TABLE */
 const table = new THREE.Mesh(
   new THREE.BoxGeometry(5,0.3,3),
   new THREE.MeshStandardMaterial({color:0x6b4a2b})
 );
-table.position.y = -0.15;
+table.position.y=-0.15;
 scene.add(table);
 
-/* =======================
-   DEFORMABLE METAL CAN
-======================= */
-const R=0.32, H=1.2, SEG=40;
-const geo = new THREE.CylinderGeometry(R,R,H,SEG,1,true);
+/* ======================
+   HIGH DETAIL CAN
+====================== */
+const R=0.32, H=1.2;
+const RADIAL=80, HEIGHT_SEG=6;
+const geo = new THREE.CylinderGeometry(R,R,H,RADIAL,HEIGHT_SEG,true);
 const mat = new THREE.MeshStandardMaterial({
   color:0xc41414,
   side:THREE.DoubleSide,
@@ -83,17 +74,15 @@ scene.add(can);
 
 const pos = geo.attributes.position;
 const base = pos.array.slice();
-const weakness=[], dent=[];
 
-for(let i=0;i<pos.count;i++){
-  weakness.push(0.4+Math.random()*0.6);
-  dent.push(0);
-}
+/* Dent data per radial sector */
+const sectorDent = new Array(RADIAL).fill(0).map(()=>0);
+const sectorWeak = new Array(RADIAL).fill(0).map(()=>0.4+Math.random()*0.6);
 
-/* =======================
-   MEDIAPIPE HANDS (FIXED)
-======================= */
-const video = document.getElementById("inputVideo");
+/* ======================
+   MEDIAPIPE HANDS
+====================== */
+const video = document.getElementById("video");
 const canvas = document.getElementById("overlay");
 const ctx = canvas.getContext("2d");
 canvas.width=240; canvas.height=180;
@@ -103,70 +92,92 @@ const hands = new Hands({
 });
 hands.setOptions({
   maxNumHands:1,
-  modelComplexity:1,
+  modelComplexity:0, // optimized
   minDetectionConfidence:0.7,
   minTrackingConfidence:0.7
 });
 
-let grip = 0;
+let grip=0, lastGrip=0;
+let lastTime=performance.now();
+let handPresent=false;
 
-function dist(a,b){
-  return Math.hypot(a.x-b.x, a.y-b.y);
-}
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
 
-hands.onResults(res=>{
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-  ctx.drawImage(video,0,0,canvas.width,canvas.height);
+hands.onResults(r=>{
+  ctx.clearRect(0,0,240,180);
+  ctx.drawImage(video,0,0,240,180);
 
-  if(!res.multiHandLandmarks) return;
-  const lm = res.multiHandLandmarks[0];
-
+  if(!r.multiHandLandmarks){
+    handPresent=false;
+    return;
+  }
+  handPresent=true;
+  const lm=r.multiHandLandmarks[0];
   drawConnectors(ctx,lm,HAND_CONNECTIONS,{color:"#00ffaa"});
   drawLandmarks(ctx,lm,{color:"#ff3355"});
 
-  const d = dist(lm[4], lm[20]);
+  const d = dist(lm[4],lm[20]);
   grip = THREE.MathUtils.clamp((0.22-d)/0.15,0,1);
 });
 
-/* CAMERA STREAM – SINGLE SOURCE */
-const cam = new Camera(video,{
-  onFrame: async ()=>{ await hands.send({image:video}); },
-  width:640,
-  height:480
-});
-cam.start();
+/* Camera */
+new Camera(video,{
+  onFrame:async()=>{await hands.send({image:video});},
+  width:640,height:480
+}).start();
 
-/* =======================
-   METAL DENT SIMULATION
-======================= */
+/* ======================
+   DEFORMATION LOOP
+====================== */
 function animate(){
   requestAnimationFrame(animate);
 
+  const now=performance.now();
+  const dt=(now-lastTime)/1000;
+  lastTime=now;
+
+  let velocity = Math.abs(grip-lastGrip)/(dt+1e-6);
+  lastGrip=grip;
+
+  if(handPresent){
+    for(let s=0;s<RADIAL;s++){
+      const force = grip*velocity*sectorWeak[s]*0.002;
+      sectorDent[s]=Math.min(sectorDent[s]+force,0.18);
+    }
+  }
+
+  /* Apply to vertices */
   for(let i=0;i<pos.count;i++){
     const idx=i*3;
-    const x0=base[idx], z0=base[idx+2];
+    const x0=base[idx], y0=base[idx+1], z0=base[idx+2];
     const r=Math.hypot(x0,z0);
     if(r<0.001) continue;
 
+    /* Lock top & bottom edges */
+    if(Math.abs(y0) > H*0.45){
+      pos.array[idx]=x0;
+      pos.array[idx+2]=z0;
+      continue;
+    }
+
+    const angle=(Math.atan2(z0,x0)+Math.PI)/(2*Math.PI);
+    const sector=Math.floor(angle*RADIAL)%RADIAL;
+
+    const dent = sectorDent[sector];
     const nx=x0/r, nz=z0/r;
-    const pressure = grip*weakness[i]*0.015;
 
-    dent[i] = Math.min(dent[i]+pressure*0.5, 0.14);
-    dent[i] *= 0.997; // very small spring-back
-
-    const finalR = R - dent[i];
-    pos.array[idx]   = nx*finalR;
-    pos.array[idx+2] = nz*finalR;
+    pos.array[idx]=nx*(R-dent);
+    pos.array[idx+2]=nz*(R-dent);
   }
 
   pos.needsUpdate=true;
-  renderer.render(scene,camera3D);
+  renderer.render(scene,cam3D);
 }
 animate();
 
 addEventListener("resize",()=>{
-  camera3D.aspect=innerWidth/innerHeight;
-  camera3D.updateProjectionMatrix();
+  cam3D.aspect=innerWidth/innerHeight;
+  cam3D.updateProjectionMatrix();
   renderer.setSize(innerWidth,innerHeight);
 });
 </script>
