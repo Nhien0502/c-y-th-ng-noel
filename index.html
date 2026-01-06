@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Realistic Coke Can Crush</title>
+<title>Five-Finger Can Crush</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
@@ -11,20 +11,13 @@
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
 
 <style>
-body { margin:0; overflow:hidden; background:#111; }
-#track {
-  position:fixed;
-  right:12px;
-  bottom:12px;
-  width:220px;
-  height:165px;
-  border:2px solid #00ffaa;
+body{margin:0;overflow:hidden;background:#111;}
+#track{
+  position:fixed;right:12px;bottom:12px;
+  width:220px;height:165px;border:2px solid #00ffaa;
 }
-#video, #overlay {
-  position:absolute;
-  width:100%;
-  height:100%;
-  object-fit:cover;
+#video,#overlay{
+  position:absolute;width:100%;height:100%;object-fit:cover;
 }
 </style>
 </head>
@@ -36,65 +29,47 @@ body { margin:0; overflow:hidden; background:#111; }
 </div>
 
 <script>
-/* =======================
+/* ======================
    THREE SCENE
-======================= */
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x111111);
+====================== */
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x111111);
 
-const cam3D = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 100);
+const cam3D=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,0.1,100);
 cam3D.position.set(0,1.4,4);
 
-const renderer = new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(innerWidth, innerHeight);
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
 document.body.appendChild(renderer.domElement);
 
 scene.add(new THREE.AmbientLight(0xffffff,0.8));
-const light = new THREE.DirectionalLight(0xffffff,0.6);
-light.position.set(4,5,3);
-scene.add(light);
 
-/* TABLE */
-const table = new THREE.Mesh(
-  new THREE.BoxGeometry(5,0.3,3),
-  new THREE.MeshStandardMaterial({color:0x6b4a2b})
-);
-table.position.y=-0.15;
-scene.add(table);
-
-/* =======================
-   HIGH RES CAN (THIN WALL)
-======================= */
-const R=0.32, H=1.2;
-const RAD=96, HSEG=8;
-
-const geo = new THREE.CylinderGeometry(R,R,H,RAD,HSEG,true);
-const mat = new THREE.MeshStandardMaterial({
-  color:0xc41414,
-  side:THREE.DoubleSide,
-  metalness:0,
-  roughness:1
-});
-const can = new THREE.Mesh(geo,mat);
+/* ======================
+   CAN GEOMETRY (HIGH RES)
+====================== */
+const R=0.32,H=1.2,RAD=120,HSEG=8;
+const geo=new THREE.CylinderGeometry(R,R,H,RAD,HSEG,true);
+const mat=new THREE.MeshStandardMaterial({color:0xc41414,side:THREE.DoubleSide});
+const can=new THREE.Mesh(geo,mat);
 can.position.y=0.6;
 scene.add(can);
 
-const pos = geo.attributes.position;
-const base = pos.array.slice();
+const pos=geo.attributes.position;
+const base=pos.array.slice();
 
-/* Panel-based dent memory */
-const panelDent = new Array(RAD).fill(0);
-const panelHardness = new Array(RAD).fill(0).map(()=>0.4+Math.random()*0.6);
+/* Panel memory */
+const panelDent=new Float32Array(RAD);
+const panelHard=new Float32Array(RAD).map(()=>0.4+Math.random()*0.6);
 
-/* =======================
-   MEDIAPIPE (LEAN)
-======================= */
-const video = document.getElementById("video");
-const canvas = document.getElementById("overlay");
-const ctx = canvas.getContext("2d");
-canvas.width=220; canvas.height=165;
+/* ======================
+   MEDIAPIPE HANDS
+====================== */
+const video=document.getElementById("video");
+const canvas=document.getElementById("overlay");
+const ctx=canvas.getContext("2d");
+canvas.width=220;canvas.height=165;
 
-const hands = new Hands({
+const hands=new Hands({
   locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
 });
 hands.setOptions({
@@ -104,12 +79,11 @@ hands.setOptions({
   minTrackingConfidence:0.7
 });
 
-let grip=0, lastGrip=0;
-let handX=0.5;
 let handVisible=false;
-let lastTime=performance.now();
+let grip=0,lastGrip=0;
+let fingerAngles=[];
 
-function dist(a,b){ return Math.hypot(a.x-b.x,a.y-b.y); }
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
 
 hands.onResults(r=>{
   ctx.clearRect(0,0,canvas.width,canvas.height);
@@ -119,14 +93,19 @@ hands.onResults(r=>{
     handVisible=false;
     return;
   }
-
   handVisible=true;
   const lm=r.multiHandLandmarks[0];
   drawConnectors(ctx,lm,HAND_CONNECTIONS,{color:"#00ffaa"});
   drawLandmarks(ctx,lm,{color:"#ff3355"});
 
-  grip = THREE.MathUtils.clamp((0.22 - dist(lm[4],lm[20]))/0.15,0,1);
-  handX = lm[9].x; // palm center (horizontal)
+  grip=THREE.MathUtils.clamp((0.22-dist(lm[4],lm[20]))/0.15,0,1);
+
+  // 5 fingertips → 5 force vectors
+  const tips=[4,8,12,16,20];
+  fingerAngles=tips.map(i=>{
+    const x=lm[i].x-0.5;
+    return (Math.atan2(0,x)+Math.PI)/(2*Math.PI);
+  });
 });
 
 new Camera(video,{
@@ -134,41 +113,32 @@ new Camera(video,{
   width:640,height:480
 }).start();
 
-/* =======================
-   PLASTIC DEFORMATION
-======================= */
+/* ======================
+   DEFORMATION LOOP
+====================== */
 function animate(){
   requestAnimationFrame(animate);
 
-  const now=performance.now();
-  const dt=(now-lastTime)/1000;
-  lastTime=now;
-
-  const velocity=Math.abs(grip-lastGrip)/(dt+1e-6);
+  const velocity=Math.abs(grip-lastGrip);
   lastGrip=grip;
 
-  if(handVisible){
-    const impactSector=Math.floor(handX*RAD);
-
-    for(let i=0;i<RAD;i++){
-      const distS=Math.min(
-        Math.abs(i-impactSector),
-        RAD-Math.abs(i-impactSector)
-      );
-
-      if(distS>4) continue; // local only
-
-      const force=grip*velocity*panelHardness[i]*0.002*(1-distS/4);
-      panelDent[i]=Math.min(panelDent[i]+force,0.2);
-    }
+  if(handVisible && grip>0.02){
+    fingerAngles.forEach(a=>{
+      const sector=Math.floor(a*RAD);
+      for(let i=-3;i<=3;i++){
+        const s=(sector+i+RAD)%RAD;
+        const weight=1-Math.abs(i)/3;
+        const force=grip*velocity*panelHard[s]*0.05*weight;
+        panelDent[s]=Math.min(panelDent[s]+force,0.25);
+      }
+    });
   }
 
-  /* Apply to vertices */
   for(let i=0;i<pos.count;i++){
     const idx=i*3;
-    const x0=base[idx], y0=base[idx+1], z0=base[idx+2];
+    const x0=base[idx],y0=base[idx+1],z0=base[idx+2];
     const r=Math.hypot(x0,z0);
-    if(r<0.001) continue;
+    if(r<0.001)continue;
 
     if(Math.abs(y0)>H*0.46){
       pos.array[idx]=x0;
@@ -176,12 +146,12 @@ function animate(){
       continue;
     }
 
-    const angle=(Math.atan2(z0,x0)+Math.PI)/(2*Math.PI);
-    const sector=Math.floor(angle*RAD)%RAD;
+    const ang=(Math.atan2(z0,x0)+Math.PI)/(2*Math.PI);
+    const s=Math.floor(ang*RAD)%RAD;
 
-    const nx=x0/r, nz=z0/r;
-    pos.array[idx]=nx*(R-panelDent[sector]);
-    pos.array[idx+2]=nz*(R-panelDent[sector]);
+    const nx=x0/r,nz=z0/r;
+    pos.array[idx]=nx*(R-panelDent[s]);
+    pos.array[idx+2]=nz*(R-panelDent[s]);
   }
 
   pos.needsUpdate=true;
