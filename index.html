@@ -2,19 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Crushable Coke Can</title>
+<title>Metal Can Deformation</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
 
 <style>
-body{margin:0; overflow:hidden; background:#222;}
+body{margin:0;overflow:hidden;background:#111;}
 #video{display:none;}
-#tracking{position:fixed; right:12px; bottom:12px; width:260px; height:195px; border:2px solid #00ffcc; border-radius:8px;}
+#tracking{position:fixed;right:12px;bottom:12px;width:240px;height:180px;border:2px solid #00ffaa;}
 #tracking video,#tracking canvas{position:absolute;width:100%;height:100%;}
 </style>
 </head>
@@ -27,124 +26,138 @@ body{margin:0; overflow:hidden; background:#222;}
 </div>
 
 <script>
-/* =======================
-   THREE.JS SETUP
-======================= */
+/* =========================
+   THREE.JS SCENE
+========================= */
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x222222);
+scene.background = new THREE.Color(0x111111);
 
-const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 100);
-camera.position.set(0,1.5,5);
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(0,1.4,4);
 
 const renderer = new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(window.innerWidth,window.innerHeight);
+renderer.setSize(innerWidth,innerHeight);
 document.body.appendChild(renderer.domElement);
 
-const controls = new THREE.OrbitControls(camera,renderer.domElement);
-controls.enablePan=false;
-
-/* LIGHTS */
-scene.add(new THREE.AmbientLight(0xffffff,0.7));
-const light = new THREE.DirectionalLight(0xffffff,0.8);
-light.position.set(5,5,5);
+scene.add(new THREE.AmbientLight(0xffffff,0.8));
+const light = new THREE.DirectionalLight(0xffffff,0.6);
+light.position.set(4,5,3);
 scene.add(light);
 
 /* TABLE */
 const table = new THREE.Mesh(
-  new THREE.BoxGeometry(6,0.3,3),
-  new THREE.MeshStandardMaterial({color:0x8B4513})
+  new THREE.BoxGeometry(5,0.3,3),
+  new THREE.MeshStandardMaterial({color:0x6b4a2b})
 );
 table.position.y=-0.15;
 scene.add(table);
 
-/* COKE CAN (Cylinder Rỗng) */
-const height = 1.2, radius = 0.3, radialSegments=32;
-const geometry = new THREE.CylinderGeometry(radius,radius,height,radialSegments,1,true); // open-ended
-// store initial positions
-const basePositions = geometry.attributes.position.array.slice();
-
-const textureCanvas = document.createElement('canvas');
-textureCanvas.width = 256; textureCanvas.height = 512;
-const ctx = textureCanvas.getContext('2d');
-ctx.fillStyle = '#E41B17'; ctx.fillRect(0,0,256,512);
-ctx.fillStyle='#FFFFFF';
-ctx.font='bold 40px Arial';
-ctx.textAlign='center';
-ctx.fillText('COKE',128,150);
-// gợn sóng
-ctx.beginPath(); ctx.moveTo(0,300); ctx.quadraticCurveTo(64,280,128,300); ctx.quadraticCurveTo(192,320,256,300); ctx.lineWidth=5; ctx.strokeStyle='white'; ctx.stroke();
-
-const tex = new THREE.CanvasTexture(textureCanvas);
-
-const material = new THREE.MeshStandardMaterial({
-  color:0xE41B17,
-  metalness:0.7,
-  roughness:0.3,
-  map: tex,
-  side: THREE.DoubleSide
+/* =========================
+   COKE CAN – METAL DENT
+========================= */
+const R = 0.32, H = 1.2, SEG = 40;
+const geo = new THREE.CylinderGeometry(R,R,H,SEG,1,true);
+const mat = new THREE.MeshStandardMaterial({
+  color:0xc41414,
+  side:THREE.DoubleSide,
+  metalness:0,
+  roughness:1
 });
-const can = new THREE.Mesh(geometry, material);
+const can = new THREE.Mesh(geo,mat);
 can.position.y=0.6;
 scene.add(can);
 
-/* =======================
+const pos = geo.attributes.position;
+const base = pos.array.slice();
+
+/* Per-vertex weakness & permanent dent memory */
+const weakness = [];
+const dentMemory = [];
+
+for(let i=0;i<pos.count;i++){
+  weakness.push(0.3 + Math.random()*0.7);
+  dentMemory.push(0); // 0 = pristine
+}
+
+/* =========================
    MEDIAPIPE HANDS
-======================= */
-const video = document.getElementById('video');
-const trackingVideo = document.getElementById('trackingVideo');
-const trackingCanvas = document.getElementById('trackingCanvas');
-const ctxTrack = trackingCanvas.getContext('2d');
-trackingCanvas.width = 260; trackingCanvas.height = 195;
+========================= */
+const video = document.getElementById("video");
+const trackingVideo = document.getElementById("trackingVideo");
+const trackingCanvas = document.getElementById("trackingCanvas");
+const ctx = trackingCanvas.getContext("2d");
+trackingCanvas.width=240;trackingCanvas.height=180;
 
 const hands = new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`});
-hands.setOptions({maxNumHands:1, modelComplexity:1, minDetectionConfidence:0.7, minTrackingConfidence:0.7});
-
-let openness=0.2; // 0.05=close, 0.25=open
-
-function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
-
-hands.onResults(res=>{
-  ctxTrack.clearRect(0,0,trackingCanvas.width,trackingCanvas.height);
-  ctxTrack.drawImage(trackingVideo,0,0,trackingCanvas.width,trackingCanvas.height);
-  if(!res.multiHandLandmarks) return;
-  const lm=res.multiHandLandmarks[0];
-  drawConnectors(ctxTrack,lm,HAND_CONNECTIONS,{color:"#00ffcc"});
-  drawLandmarks(ctxTrack,lm,{color:"#ff3366"});
-
-  const thumbTip = lm[4], pinkyTip = lm[20];
-  openness = dist(thumbTip,pinkyTip);
-  openness = Math.min(Math.max(openness,0.05),0.25);
+hands.setOptions({
+  maxNumHands:1,
+  minDetectionConfidence:0.7,
+  minTrackingConfidence:0.7
 });
 
-/* CAMERA INPUT */
-const cam = new Camera(video,{onFrame:async()=>{await hands.send({image:video});}, width:640,height:480});
-cam.start();
-navigator.mediaDevices.getUserMedia({video:true}).then(s=>trackingVideo.srcObject=s);
+let grip = 0; // 0=open, 1=closed
 
-/* =======================
-   ANIMATION LOOP (Bóp CAN)
-======================= */
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y);}
+
+hands.onResults(r=>{
+  ctx.clearRect(0,0,240,180);
+  ctx.drawImage(trackingVideo,0,0,240,180);
+  if(!r.multiHandLandmarks) return;
+  const lm=r.multiHandLandmarks[0];
+  drawConnectors(ctx,lm,HAND_CONNECTIONS,{color:"#00ffaa"});
+  drawLandmarks(ctx,lm,{color:"#ff3355"});
+
+  const d = dist(lm[4],lm[20]);
+  grip = THREE.MathUtils.clamp((0.22-d)/0.15,0,1);
+});
+
+new Camera(video,{
+  onFrame:async()=>{await hands.send({image:video});},
+  width:640,height:480
+}).start();
+
+navigator.mediaDevices.getUserMedia({video:true})
+.then(s=>trackingVideo.srcObject=s);
+
+/* =========================
+   DEFORMATION LOOP
+========================= */
 function animate(){
   requestAnimationFrame(animate);
 
-  // Lấy array vertices
-  const pos = geometry.attributes.position.array;
-  for(let i=0;i<pos.length;i+=3){
-    const x0=basePositions[i], z0=basePositions[i+2];
-    const scale = 1 - (0.2 - openness)*1.5; // gain bẹp
-    pos[i] = x0*scale;
-    pos[i+2] = z0*scale;
-  }
-  geometry.attributes.position.needsUpdate = true;
+  for(let i=0;i<pos.count;i++){
+    const ix=i*3;
+    const x0=base[ix], z0=base[ix+2];
+    const r0=Math.hypot(x0,z0);
 
+    if(r0<0.001) continue;
+
+    const nx=x0/r0, nz=z0/r0;
+
+    /* Applied pressure */
+    const pressure = grip * weakness[i] * 0.015;
+
+    /* Permanent dent accumulation */
+    dentMemory[i] = Math.min(dentMemory[i] + pressure*0.4, 0.12);
+
+    /* Partial recovery (metal spring-back, very small) */
+    dentMemory[i] *= 0.998;
+
+    const finalR = R - dentMemory[i];
+
+    pos.array[ix]   = nx * finalR;
+    pos.array[ix+2] = nz * finalR;
+  }
+
+  pos.needsUpdate=true;
   renderer.render(scene,camera);
 }
 animate();
 
-window.addEventListener('resize',()=>{
-  camera.aspect=window.innerWidth/window.innerHeight;
+addEventListener("resize",()=>{
+  camera.aspect=innerWidth/innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth,window.innerHeight);
+  renderer.setSize(innerWidth,innerHeight);
 });
 </script>
 
